@@ -1,0 +1,12 @@
+# Runtime dependencies for zarr_download.ipynb
+# Reminder: requires Python version >= 3.11
+zarr>=3
+globus-sdk
+globus-cli
+requests
+numpy
+matplotlib
+ipywidgets
+
+# Notebook front-end (either works; JupyterLab pulled in for convenience)
+jupyterlab
