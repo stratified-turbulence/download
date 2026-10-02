@@ -1,10 +1,10 @@
 # Zarr download instructions for vertical shear data archived on Constellation
 
-**Constellation path to be updated once available**
+**Use [interactive download portal: https://strata-turbulence.ca/shear/](https://strata-turbulence.ca/shear/)**
 
 ## Struture of archive
 
-**Location:** Archive stored under `/Constellation/Path/To/Be/Updated`.
+**Location:** Archive stored under [doi.org/10.13139/OLCF/3409014](https://doi.org/10.13139/OLCF/3409014).
 
 **Format:**
 - Thirteen folders labelled `R#P#.zarr`, corresponding to different simulations (see table below). Simulations are size $N_x \times N_x /2 \times N_x /4$ (see `ACCOMPANYING PAPER TO BE LINKED ONCE SUBMITTED`)
@@ -34,20 +34,12 @@
 
 ## Accessing the data
 
-For files downloaded using either option 1 or 2 below, `zarr_download.ipynb` contains a sample visualiztion script in the last cell.
-
 
 ### Option 1 (recommended): Interactive subcube download (via live-stream HTTPS or Globus command line interface)
 
+Visit **[interactive download portal: https://strata-turbulence.ca/shear/](https://strata-turbulence.ca/shear/)**.
+
 User can specify x,y,z ranges from any simulation, variable, sparsing level, and download requested subvolume on demand to local computer.
-
-
-**Instructions:**
-1. Ensure you are using Python version >= 3.11. Check with `python3 --version`
-2. Create Python environment using `requirements.txt` (see Appendix B)
-3. Run `zarr_download.ipynb` (using IDE such as VS code, or `jupyter notebook zarr_download.ipynb` etc), and follow instructions within.
-
-
 
 
 ### Option 2: Download full variable files using Globus GUI 
@@ -56,7 +48,7 @@ Note: cannot download subchunks this way (see Option 1 instead)
 
 **Step 1: Download**
 - Install Globus Connect Personal on your local machine (see Appendix A), or use Globus endpoint already set up on your cluster.
-- [Login to Globus](https://app.globus.org/dashboard). Under File Manager, navigate to `/Constellation/Path/To/Be/Updated`
+- [Login to Globus](https://app.globus.org/dashboard). Under File Manager, navigate to Collection: `OLCF DOI-DOWNLOADS` and Path `/gen101/world-shared/doi-data/OLCF/202609/10.13139_OLCF_3409014/`
 - Choose folder to download (folder contains all the chunks required to reconstruct full field). For example: `R4P50.zarr/r/3` (R4P50 simulation, r variable, sparse level 3 (every 2^3 = 8th point))
 - Download that folder, which must include both a `c` folder (contains all chunks) and `zarr.json` file (description of chunking), to your desired machine. If you get confused about what variable you are downloading after it's on your local machine, check the `attributes` field of the associated zarr.json file, which will list simulation, variable and level details.
 
@@ -91,8 +83,3 @@ Follow these steps to install the required Python environment:
    - `my_env_name\Scripts\activate`    # Windows
 
 4. Install dependencies from requirements.txt: `pip install -r requirements.txt`
-
-
-
-
-
