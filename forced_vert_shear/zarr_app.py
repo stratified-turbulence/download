@@ -31,7 +31,6 @@ W = widgets.Layout       # shorthand used by both panel builders
 # to touch it. configure() merges the user's dict over these (see configure()).
 DEFAULTS = {
     # --- Globus HTTPS endpoint of the mapped collection holding the stores ---
-    ## THE FOLLOWING WILL BE UPDATED ONCE THE CONSTELLATION REPOSITORY IS PUBLISHED ##
     "COLLECTION_ID": "57618e0a-2c99-45ff-9694-24141b92fa17",   # collection UUID (Globus > collection > Overview)
     "HTTPS_BASE":    "https://g-e320e6.63720f.75bc.data.globus.org",  # HTTPS server URL
     "STORE_ROOT":    "/gen101/world-shared/doi-data/OLCF/202609/10.13139_OLCF_3409014/zarr/",   # dir that CONTAINS the <CASE>.zarr stores
