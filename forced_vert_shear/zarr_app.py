@@ -2,13 +2,13 @@
 
 Keep this file next to the notebook. The notebook is only four short calls:
     import zarr_app
-    zarr_app.authenticate(CONFIG)   # step 2
-    zarr_app.download_panel()       # step 3
-    zarr_app.visualize_panel()      # step 4
+    zarr_app.configure(CONFIG)      # step 1
+    zarr_app.download_panel()       # step 2
+    zarr_app.visualize_panel()      # step 3
 Everything else lives here so the notebook stays free of code clutter.
 """
 
-import os, math, itertools, time, threading, re, struct
+import os, io, html, math, itertools, time, threading, re, struct
 import numpy as np
 import requests
 import zarr
@@ -17,9 +17,9 @@ import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import mpl_toolkits.mplot3d  # noqa: F401  (registers the 3d projection)
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from IPython.display import display, HTML
+from IPython.display import display
 
-# module-level state, populated by configure()/authenticate() below
+# module-level state, populated by configure() below
 CONFIG = STORE = CATALOG = TOKEN = None
 
 W = widgets.Layout       # shorthand used by both panel builders
@@ -32,11 +32,12 @@ W = widgets.Layout       # shorthand used by both panel builders
 DEFAULTS = {
     # --- Globus HTTPS endpoint of the mapped collection holding the stores ---
     ## THE FOLLOWING WILL BE UPDATED ONCE THE CONSTELLATION REPOSITORY IS PUBLISHED ##
-    "COLLECTION_ID": "",   # collection UUID (Globus > collection > Overview)
-    "HTTPS_BASE":    "",  # HTTPS server URL
-    "STORE_ROOT":    "",   # dir that CONTAINS the <CASE>.zarr stores
+    "COLLECTION_ID": "57618e0a-2c99-45ff-9694-24141b92fa17",   # collection UUID (Globus > collection > Overview)
+    "HTTPS_BASE":    "https://g-e320e6.63720f.75bc.data.globus.org",  # HTTPS server URL
+    "STORE_ROOT":    "/gen101/world-shared/doi-data/OLCF/202609/10.13139_OLCF_3409014/zarr/",   # dir that CONTAINS the <CASE>.zarr stores
 
     # --- Globus Native app used only for the OAuth login --------------------
+    "REQUIRE_LOGIN": False,              # collection is public; True forces a Globus login
     "CLIENT_ID":     "d47db6dc-0428-4076-9a6e-31927d7c7704",
 
     # --- local working dirs / limits (user-overridable in the notebook) -----
@@ -104,7 +105,7 @@ class Store:
 
     def __init__(self, cfg, token):
         self.base = cfg["HTTPS_BASE"].rstrip("/") + "/" + cfg["STORE_ROOT"].strip("/")
-        self.h = {"Authorization": f"Bearer {token}"}
+        self.h = {"Authorization": f"Bearer {token}"} if token else {}   # public: no auth
         self.s = requests.Session()
         pool = cfg.get("DL_WORKERS", 8) + 4     # headroom so concurrent GETs don't
         ad = requests.adapters.HTTPAdapter(     # queue behind a too-small conn pool
@@ -570,6 +571,29 @@ def _draw_box(ax, x0, x1, y0, y1, z0, z1, **kw):
         ax.plot(*zip(pts[a], pts[b]), **kw)
 
 
+# The panels never redraw through Output widgets + clear_output(wait=True):
+# VS Code's notebook renderer doesn't reliably honour those clears, so stale
+# plots/progress bars pile up. Instead, plots go into a widgets.Image (value
+# replaced in place) and status areas are VBoxes whose .children are swapped.
+def _fig_png(fig):
+    """Render fig to PNG bytes (cropped like inline plt.show()) and close it."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def _png_slot():
+    """An Image widget hidden until it holds a plot (an empty Image renders as
+    a broken-picture icon in VS Code)."""
+    return widgets.Image(format="png", layout=W(display="none"))
+
+
+def _show_fig(img, fig):
+    img.value = _fig_png(fig)
+    img.layout.display = None
+
+
 # --------------------------------------------------------- catalog ----------
 def load_catalog():
     """Load the FROZEN, hardcoded catalog captured by build_catalog.py -- no
@@ -588,22 +612,22 @@ def load_catalog():
 
 
 # --------------------------------------------------------- run it -----------
-def _authenticate():
+def _connect():
     global TOKEN, STORE, CATALOG
-    TOKEN = globus_https_token(CONFIG)
+    TOKEN = globus_https_token(CONFIG) if CONFIG.get("REQUIRE_LOGIN") else None
     STORE = Store(CONFIG, TOKEN)
     CATALOG, pending, generated = load_catalog()
     if CATALOG is None:
-        print("\nAuthenticated, but no frozen catalog was found "
+        print("\nConnected, but no frozen catalog was found "
               "(app/store_catalog.py).\nA maintainer must generate it once:  "
               "python build_catalog.py")
         return
-    print("Authenticated")
+    print("Connected")
 
 
 def _open_download_panel():
     if CATALOG is None:
-        print("Run Step 2 (Authenticate & discover) and click its button first.")
+        print("Run Step 1 (Configure) first.")
         return
 
     def _meta():
@@ -635,7 +659,7 @@ def _open_download_panel():
     dl_full = widgets.Checkbox(value=False, description="Download entire box (full range)",
                                indent=False, layout=W(width="320px"))
     dl_est  = widgets.HTML()
-    dl_wire = widgets.Output()
+    dl_wire = _png_slot()
     _BTN_W = "300px"                        # both action buttons share this width
     dl_go   = widgets.Button(description="Download live (smaller jobs)", button_style="primary",
                              icon="download", layout=W(width=_BTN_W, height="auto"))
@@ -645,8 +669,8 @@ def _open_download_panel():
                                      "(robust path for large sub-cubes; you submit it)")
     for _b in (dl_go, dl_cli):              # allow the label to wrap instead of clipping
         _b.add_class("zarr-wrap-btn")
-    dl_out  = widgets.Output()
-    dl_cli_out = widgets.Output()
+    dl_out  = widgets.VBox()                # status area: swap .children (see _fig_png)
+    dl_cli_out = widgets.VBox()
 
     def _fill_vars(*_):
         avail = CATALOG[dl_case.value]["vars"]
@@ -682,16 +706,15 @@ def _open_download_panel():
     def _draw_wire(shape, sel):
         nx, ny, nz = shape
         x0, x1, y0, y1, z0, z1 = sel
-        with dl_wire:
-            dl_wire.clear_output(wait=True)
-            fig = plt.figure(figsize=(5, 4)); ax = fig.add_subplot(111, projection="3d")
-            _draw_box(ax, 0, nx, 0, ny, 0, nz, color="0.65", lw=0.8)
-            _draw_box(ax, x0, x1, y0, y1, z0, z1, color="tab:red", lw=2.5)
-            ax.set_xlim(0, nx); ax.set_ylim(0, ny); ax.set_zlim(0, nz)
-            ax.set_box_aspect((nx, ny, nz))
-            ax.set(xlabel="x", ylabel="y", zlabel="z")
-            ax.set_title("Selection within full domain", fontsize=10)
-            ax.view_init(elev=22, azim=-58); plt.show(); plt.close(fig)
+        fig = plt.figure(figsize=(5, 4)); ax = fig.add_subplot(111, projection="3d")
+        _draw_box(ax, 0, nx, 0, ny, 0, nz, color="0.65", lw=0.8)
+        _draw_box(ax, x0, x1, y0, y1, z0, z1, color="tab:red", lw=2.5)
+        ax.set_xlim(0, nx); ax.set_ylim(0, ny); ax.set_zlim(0, nz)
+        ax.set_box_aspect((nx, ny, nz))
+        ax.set(xlabel="x", ylabel="y", zlabel="z")
+        ax.set_title("Selection within full domain", fontsize=10)
+        ax.view_init(elev=22, azim=-58)
+        _show_fig(dl_wire, fig)
 
     def _fmt_size(mb):                                    # MB, switching to GB past 1000 MB
         return f"{mb / 1024:.2f} GB" if mb > 1000 else f"{mb:.0f} MB"
@@ -743,17 +766,15 @@ def _open_download_panel():
             x0, x1, y0, y1, z0, z1 = sel
             data = (x1 - x0) * (y1 - y0) * (z1 - z0) * 4 / 1e6      # reconstructed cube MB
             if data / 1024 > CONFIG["MAX_FETCH_GB"]:
-                with dl_out:
-                    dl_out.clear_output(wait=True)
-                    display(HTML(f"<span style='color:#b00'><b>Selection too large:</b> "
-                                 f"{data/1024:.1f} GB exceeds MAX_FETCH_GB="
-                                 f"{CONFIG['MAX_FETCH_GB']}. Narrow it or pick a coarser "
-                                 f"level.</span>"))
+                dl_out.children = [widgets.HTML(
+                    f"<span style='color:#b00'><b>Selection too large:</b> "
+                    f"{data/1024:.1f} GB exceeds MAX_FETCH_GB="
+                    f"{CONFIG['MAX_FETCH_GB']}. Narrow it or pick a coarser "
+                    f"level.</span>")]
                 return
             prog = widgets.FloatProgress(min=0, max=1, layout=W(width="420px"))
             lab  = widgets.HTML()
-            with dl_out:
-                dl_out.clear_output(wait=True); display(widgets.VBox([lab, prog]))
+            dl_out.children = [lab, prog]
 
             def _fmt_eta(s):
                 s = int(max(s, 0)); return f"{s // 60}:{s % 60:02d}"
@@ -840,9 +861,8 @@ def _open_download_panel():
                 path, fname, size = save_subbox(ap, CONFIG["SAVE_DIR"], dl_case.value,
                                                 dl_var.value, dl_level.value, m["inner"],
                                                 sel, on_start=s2, on_block=b2)
-            with dl_out:
-                dl_out.clear_output(wait=True)
-                display(HTML(f"<b>Saved</b> &nbsp;<code>{fname}</code>&nbsp; ({size:.1f} MB)"))
+            dl_out.children = [widgets.HTML(
+                f"<b>Saved</b> &nbsp;<code>{fname}</code>&nbsp; ({size:.1f} MB)")]
         finally:
             dl_go.disabled = False
 
@@ -867,9 +887,7 @@ def _open_download_panel():
                 "lands under <code>CACHE_DIR</code>, which that endpoint must be able "
                 "to access.</div>")
 
-        with dl_cli_out:
-            dl_cli_out.clear_output(wait=True)
-            display(widgets.VBox([
+        dl_cli_out.children = [widgets.VBox([
                 widgets.HTML(
                     "<b>Terminal commands for Globus transfer outside of notebook.</b><br>"
                     f"<code>{r['folder']}</code> &nbsp; "
@@ -887,7 +905,7 @@ def _open_download_panel():
                              "finishes, navigate to SAVE_DIR and paste this into the terminal to reassemble the downloaded chunks into "
                              f"<code>{r['folder']}.npy</code>."),
                 _box(r["reconstruct"]),
-            ]))
+            ])]
 
     dl_go.on_click(_on_go)
     dl_cli.on_click(_on_cli)
@@ -935,7 +953,11 @@ def _open_visualize_panel():
     vor  = widgets.ToggleButtons(options=[("xy", "xy"), ("yz", "yz"), ("xz", "xz")],
                                  value="xy", description="Plane:")
     vpos = widgets.IntSlider(description="z", continuous_update=False, layout=W(width="520px"))
-    vst  = widgets.Output(); vbox = widgets.Output(); vwire = widgets.Output(); vimg = widgets.Output()
+    vst  = widgets.HTML()                   # status line; plots below are Images (see _fig_png)
+    vbox, vwire, vimg = _png_slot(), _png_slot(), _png_slot()
+
+    def _status(msg):
+        vst.value = f"<code>{html.escape(msg)}</code>"
 
     def _saved():
         return sorted(glob.glob(os.path.join(CONFIG["SAVE_DIR"], "*.npy")))
@@ -943,10 +965,8 @@ def _open_visualize_panel():
     def _refresh(_=None):
         fs = _saved(); vf.options = [(os.path.basename(f), f) for f in fs]
         vf.value = fs[0] if fs else None              # ipywidgets>=8 won't auto-select
-        with vst:
-            vst.clear_output(wait=True)
-            print(f"{len(fs)} cube(s) in {CONFIG['SAVE_DIR']}" if fs
-                  else "No .npy yet - download one above.")
+        _status(f"{len(fs)} cube(s) in {CONFIG['SAVE_DIR']}" if fs
+                else "No .npy yet - download one above.")
 
     def _slice_wire(sel, o, pos):
         x0, x1, y0, y1, z0, z1 = sel
@@ -956,17 +976,16 @@ def _open_visualize_panel():
             x = x0 + pos; corners = [(x, y0, z0), (x, y1, z0), (x, y1, z1), (x, y0, z1)]
         else:
             y = y0 + pos; corners = [(x0, y, z0), (x1, y, z0), (x1, y, z1), (x0, y, z1)]
-        with vwire:
-            vwire.clear_output(wait=True)
-            fig = plt.figure(figsize=(4, 3.4)); ax = fig.add_subplot(111, projection="3d")
-            _draw_box(ax, x0, x1, y0, y1, z0, z1, color="0.6", lw=0.9)
-            ax.add_collection3d(Poly3DCollection([corners], alpha=0.35,
-                                facecolor="tab:red", edgecolor="tab:red"))
-            ax.set_xlim(x0, x1); ax.set_ylim(y0, y1); ax.set_zlim(z0, z1)
-            ax.set_box_aspect((x1 - x0, y1 - y0, z1 - z0))
-            ax.set(xlabel="x", ylabel="y", zlabel="z")
-            ax.set_title("Slice position in sub-cube", fontsize=9)
-            ax.view_init(elev=22, azim=-58); plt.show(); plt.close(fig)
+        fig = plt.figure(figsize=(4, 3.4)); ax = fig.add_subplot(111, projection="3d")
+        _draw_box(ax, x0, x1, y0, y1, z0, z1, color="0.6", lw=0.9)
+        ax.add_collection3d(Poly3DCollection([corners], alpha=0.35,
+                            facecolor="tab:red", edgecolor="tab:red"))
+        ax.set_xlim(x0, x1); ax.set_ylim(y0, y1); ax.set_zlim(z0, z1)
+        ax.set_box_aspect((x1 - x0, y1 - y0, z1 - z0))
+        ax.set(xlabel="x", ylabel="y", zlabel="z")
+        ax.set_title("Slice position in sub-cube", fontsize=9)
+        ax.view_init(elev=22, azim=-58)
+        _show_fig(vwire, fig)
 
     def _plot(*_):
         if VS["busy"] or VS["data"] is None:
@@ -984,33 +1003,31 @@ def _open_visualize_panel():
                 return a
             with np.errstate(divide="ignore", invalid="ignore"):
                 return np.where(a > 0, np.log10(a), np.nan)   # non-positive -> blank
-        with vimg:
-            vimg.clear_output(wait=True)
-            fig, ax = plt.subplots(figsize=(7, 4.5))
-            if o == "xy":
-                im = ax.imshow(sl(d[:, :, p].T), extent=[x0, x1, y0, y1], **kw)
-                ax.set(xlabel="x", ylabel="y", title=f"{label}  -  xy @ z = {z0 + p}")
-            elif o == "yz":
-                im = ax.imshow(sl(d[p, :, :].T), extent=[y0, y1, z0, z1], **kw)
-                ax.set(xlabel="y", ylabel="z", title=f"{label}  -  yz @ x = {x0 + p}")
-            else:
-                im = ax.imshow(sl(d[:, p, :].T), extent=[x0, x1, z0, z1], **kw)
-                ax.set(xlabel="x", ylabel="z", title=f"{label}  -  xz @ y = {y0 + p}")
-            fig.colorbar(im, ax=ax, label=label); plt.tight_layout(); plt.show()
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        if o == "xy":
+            im = ax.imshow(sl(d[:, :, p].T), extent=[x0, x1, y0, y1], **kw)
+            ax.set(xlabel="x", ylabel="y", title=f"{label}  -  xy @ z = {z0 + p}")
+        elif o == "yz":
+            im = ax.imshow(sl(d[p, :, :].T), extent=[y0, y1, z0, z1], **kw)
+            ax.set(xlabel="y", ylabel="z", title=f"{label}  -  yz @ x = {x0 + p}")
+        else:
+            im = ax.imshow(sl(d[:, p, :].T), extent=[x0, x1, z0, z1], **kw)
+            ax.set(xlabel="x", ylabel="z", title=f"{label}  -  xz @ y = {y0 + p}")
+        fig.colorbar(im, ax=ax, label=label); fig.tight_layout()
+        _show_fig(vimg, fig)
         _slice_wire(sel, o, p)
 
     def _domain():
-        with vbox:
-            vbox.clear_output(wait=True)
-            nx, ny, nz = VS["domain"]; x0, x1, y0, y1, z0, z1 = VS["sel"]
-            fig = plt.figure(figsize=(4, 3.4)); ax = fig.add_subplot(111, projection="3d")
-            _draw_box(ax, 0, nx, 0, ny, 0, nz, color="0.7", lw=0.7)
-            _draw_box(ax, x0, x1, y0, y1, z0, z1, color="tab:red", lw=2)
-            ax.set_xlim(0, nx); ax.set_ylim(0, ny); ax.set_zlim(0, nz)
-            ax.set_box_aspect((nx, ny, nz))
-            ax.set(xlabel="x", ylabel="y", zlabel="z")
-            ax.set_title("Sub-box in full domain", fontsize=9)
-            ax.view_init(elev=22, azim=-58); plt.show(); plt.close(fig)
+        nx, ny, nz = VS["domain"]; x0, x1, y0, y1, z0, z1 = VS["sel"]
+        fig = plt.figure(figsize=(4, 3.4)); ax = fig.add_subplot(111, projection="3d")
+        _draw_box(ax, 0, nx, 0, ny, 0, nz, color="0.7", lw=0.7)
+        _draw_box(ax, x0, x1, y0, y1, z0, z1, color="tab:red", lw=2)
+        ax.set_xlim(0, nx); ax.set_ylim(0, ny); ax.set_zlim(0, nz)
+        ax.set_box_aspect((nx, ny, nz))
+        ax.set(xlabel="x", ylabel="y", zlabel="z")
+        ax.set_title("Sub-box in full domain", fontsize=9)
+        ax.view_init(elev=22, azim=-58)
+        _show_fig(vbox, fig)
 
     def _set_axis(o, default="mid"):
         letter, axis = PERP[o]; n = VS["data"].shape[axis]
@@ -1024,8 +1041,7 @@ def _open_visualize_panel():
 
     def _on_load(_):
         if not vf.value:
-            with vst:
-                vst.clear_output(wait=True); print("Pick a file (Refresh if empty).")
+            _status("Pick a file (Refresh if empty).")
             return
         d = np.load(vf.value, mmap_mode="r")            # memmap: touched pages only
         parsed = parse_name(vf.value)
@@ -1044,9 +1060,7 @@ def _open_visualize_panel():
             vals = sub
         VS.update(data=d, sel=sel, domain=tuple(domain), var=var, busy=True,
                   vlim=tuple(np.percentile(vals, [2, 98])))
-        with vst:
-            vst.clear_output(wait=True)
-            print(f"Loaded {os.path.basename(vf.value)}   shape={d.shape}")
+        _status(f"Loaded {os.path.basename(vf.value)}   shape={d.shape}")
         if 1 in d.shape:                                 # a single saved plane
             o = {0: "yz", 1: "xz", 2: "xy"}[list(d.shape).index(1)]
             vor.value = o; _set_axis(o, default=0)
@@ -1069,29 +1083,33 @@ def _open_visualize_panel():
 # Public API — the notebook calls just these four.
 # ---------------------------------------------------------------------------
 def configure(config=None):
-    """Merge the notebook's CONFIG over the baked-in DEFAULTS and make working
-    dirs. The notebook only needs to supply the four user knobs (CACHE_DIR,
-    SAVE_DIR, MAX_FETCH_GB, DL_WORKERS); the collection coordinates and the rest
-    come from DEFAULTS. Passing None uses the defaults verbatim; any keys given
-    override them, so power users can still tweak anything."""
+    """Step 1: merge the notebook's CONFIG over the baked-in DEFAULTS, make
+    working dirs, and connect to the store (logging into Globus only if
+    REQUIRE_LOGIN) and load the catalog. The notebook only needs to supply the
+    four user knobs (CACHE_DIR, SAVE_DIR, MAX_FETCH_GB, DL_WORKERS); the
+    collection coordinates and the rest come from DEFAULTS. Passing None uses
+    the defaults verbatim; any keys given override them, so power users can
+    still tweak anything."""
     global CONFIG
     CONFIG = {**DEFAULTS, **(config or {})}
     os.makedirs(CONFIG["CACHE_DIR"], exist_ok=True)
     os.makedirs(CONFIG["SAVE_DIR"], exist_ok=True)
+    _connect()
 
 
 def authenticate(config=None):
-    """Step 2: log into Globus and load the catalog (runs on cell execution)."""
-    if config is not None:
-        configure(config)
-    _authenticate()
+    """Old name for configure(), kept so earlier copies of the notebook run."""
+    configure(config)
 
 
 def download_panel():
-    """Step 3: open the interactive download panel (runs on cell execution)."""
+    """Step 2: open the interactive download panel (runs on cell execution)."""
     _open_download_panel()
 
 
 def visualize_panel():
-    """Step 4: open the interactive visualize panel (runs on cell execution)."""
+    """Step 3: open the interactive visualize panel (runs on cell execution)."""
+    if CONFIG is None:
+        print("Run Step 1 (Configure) first.")
+        return
     _open_visualize_panel()
