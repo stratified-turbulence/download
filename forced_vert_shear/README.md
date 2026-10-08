@@ -2,12 +2,12 @@
 
 **The simplest method for visualizing and downloading subvolumes of this dataset is by visiting the [interactive download portal: https://strata-turbulence.ca/shear/](https://strata-turbulence.ca/shear/)**
 
-## Struture of archive
+## Structure of archive
 
-**Location:** Archive stored under [doi.org/10.13139/OLCF/3409014](https://doi.org/10.13139/OLCF/3409014).
+**Location:** Archive stored under [doi.org/10.13139/OLCF/3409014](https://doi.ccs.ornl.gov/dataset/d6fa913a-184d-5aef-a81a-b7cfc47f5112).
 
 **Format:**
-- Thirteen folders labelled `R#P#.zarr`, corresponding to different simulations (see table below). Simulations are size $N_x \times N_x /2 \times N_x /4$ (see further details under main Constellation README [doi.org/10.13139/OLCF/3409014](https://doi.org/10.13139/OLCF/3409014)).
+- Thirteen folders labelled `R#P#.zarr`, corresponding to different simulations (see table below). Simulations are size $N_x \times N_x /2 \times N_x /4$ (see further details under main Constellation README [doi.org/10.13139/OLCF/3409014](https://doi.ccs.ornl.gov/dataset/d6fa913a-184d-5aef-a81a-b7cfc47f5112)).
 - Each `R#P#.zarr` contains six variables (`u,v,w,r,ee,chi`)
 - Each variable contains a folder labelled `0` (and potentially further folders `1`, `2`, ...). These numbers represent sparsing levels. `0` corresponds to full resolution data, `1` corresponds to every 2nd point, `2` corresponds to every 4th point etc. Sparsing levels are chosen such that the maximum sparsing level per simulation gives a resolution of roughly $N_x<2000$. 
 - Each variable, including at every sparsed level, is stored in Zarr (v3) format, detailed in the zarr.json file associated with each variable. Each field is split into separate subvolume (chunks) of size $128\times128\times128$ gridpoints (8 MiB each). To reduce the number of files, $6\times6\times6$ groups of chunks are then combined together in larger "shards" roughly of size 1.7 GiB.
@@ -46,14 +46,14 @@ User can specify x,y,z ranges from any simulation, variable, sparsing level, and
 
 **Instructions.**
 On local machine:
-1. Ensure you are using Python version >= 3.11. Check with `python3 --version`
-2. Create Python environment using `requirements.txt` (see Appendix B)
+1. Ensure you are using Python version >= 3.11. Check with `python3 --version`.
+2. Create Python environment using `requirements.txt` (see Appendix B).
 3. Run `zarr_download.ipynb` (using IDE such as VS code, or `jupyter notebook zarr_download.ipynb` etc), and follow instructions within.
 
 
 ### Option 3: Download full variable files using Globus GUI 
 
-Note: cannot download subchunks this way (see Options 1 or 2 instead)
+Note: cannot download subchunks this way (see options 1 or 2 instead)
 
 **Step 1: Download**
 - Install Globus Connect Personal on your local machine (see Appendix A), or use Globus endpoint already set up on your cluster.
